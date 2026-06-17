@@ -119,8 +119,8 @@ func TestUsableGatewayNameAndFilter(t *testing.T) {
 	assert.Equal(t, "aws-microk8s", usableGatewayName(noDisplay))
 	assert.Equal(t, "acc-x/p-y/defaultCluster", usableGatewayName(defaultCluster))
 
-	assert.True(t, gatewayMatchesFilter(withDisplay, ""))
-	assert.True(t, gatewayMatchesFilter(withDisplay, "gcp"))
-	assert.False(t, gatewayMatchesFilter(withDisplay, "aws"))
-	assert.True(t, gatewayMatchesFilter(noDisplay, "aws-microk8s"))
+	assert.True(t, gatewayMatchesFilter(usableGatewayName(withDisplay), ""))
+	assert.True(t, gatewayMatchesFilter(usableGatewayName(withDisplay), "gcp"))
+	assert.False(t, gatewayMatchesFilter(usableGatewayName(withDisplay), "aws"))
+	assert.True(t, gatewayMatchesFilter(usableGatewayName(noDisplay), "aws-microk8s"))
 }

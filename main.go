@@ -45,6 +45,11 @@ const GATEWAY_RUNNING_STATUS = "Running"
 const EXIT_CODE_SUCCESS = 0
 const EXIT_CODE_ERROR = 1
 
+// tokenNotSetMessage is the single source of truth for the missing-token error.
+// It is surfaced both as the fail-fast guard in main and as the library
+// precondition in retrieveListOfGatewaysUsingToken.
+const tokenNotSetMessage = "Akeyless token is not set. Please set the token using the -t or --token flag or set the AKEYLESS_TOKEN environment variable"
+
 var options Options
 
 func main() {
@@ -69,7 +74,7 @@ func main() {
 	}
 
 	if options.Token == "" {
-		fatal("Akeyless token is not set. Please set the token using the -t or --token flag or set the AKEYLESS_TOKEN environment variable")
+		fatal(tokenNotSetMessage)
 	}
 	if options.ApiGatewayUrl == "" {
 		fatal("Akeyless API Gateway URL is not set")
@@ -88,9 +93,7 @@ func main() {
 	if options.GatewayNameFilter != "" {
 		fmt.Println("Gateway name filter:", aurora.BrightCyan(options.GatewayNameFilter))
 	}
-	if options.ApiGatewayUrl != "https://api.akeyless.io" {
-		fmt.Println("Akeyless API Gateway URL:", aurora.BrightCyan(options.ApiGatewayUrl))
-	}
+	fmt.Println("Listing gateways via:", aurora.BrightCyan(options.ApiGatewayUrl))
 	if len(kube.caPEM) == 0 {
 		fmt.Println(aurora.BrightYellow("Warning: current context has no CA certificate data; cannot correlate gateway configs to this cluster by CA."))
 	}
@@ -122,7 +125,7 @@ func main() {
 			}
 			continue
 		}
-		if !gatewayMatchesFilter(gateway, options.GatewayNameFilter) {
+		if !gatewayMatchesFilter(name, options.GatewayNameFilter) {
 			if options.Verbose {
 				fmt.Println("Skipping gateway (name filter):", aurora.BrightYellow(name))
 			}
@@ -136,9 +139,14 @@ func main() {
 			continue
 		}
 
+		// Normalize the gateway base URL once. The gateway serves its /config
+		// REST endpoints at the root and the Akeyless v2 API methods under the
+		// /api/v2 prefix (the SaaS serves the v2 methods at the root instead).
+		gatewayBase := strings.TrimRight(*clusterURL, "/")
+
 		// The unified gateway summarizes /config/k8s-auths (names only), so we
 		// enumerate names here and fetch the full detail per config below.
-		authNames, err := listK8sAuthConfigNames(*clusterURL, options.Token)
+		authNames, err := listK8sAuthConfigNames(gatewayBase, options.Token)
 		if err != nil {
 			fmt.Println(aurora.BrightYellow(fmt.Sprintf("Skipping gateway %q (%s): %v", name, *clusterURL, err)))
 			continue
@@ -147,11 +155,7 @@ func main() {
 			fmt.Printf("Gateway %q has %d k8s auth config(s): %v\n", name, len(authNames), authNames)
 		}
 
-		// The unified gateway serves the Akeyless v2 API methods under the
-		// /api/v2 prefix (the SaaS serves them at the root). The per-config
-		// detail call therefore targets that prefix, while the name listing
-		// above uses the gateway's /config REST endpoint at the root.
-		gwAPI := newGatewayAPI(strings.TrimRight(*clusterURL, "/") + "/api/v2")
+		gwAPI := newGatewayAPI(gatewayBase + "/api/v2")
 		// A gateway runs in exactly one cluster. We only treat its local-CA-JWT
 		// configs as relevant to the current cluster once another config on the
 		// same gateway has been CA-matched to it, which proves co-location.
@@ -365,7 +369,7 @@ func newGatewayAPI(url string) *akeyless.V2ApiService {
 
 func retrieveListOfGatewaysUsingToken(client *akeyless.V2ApiService, token string) (akeyless.GatewaysListResponse, error) {
 	if token == "" {
-		return akeyless.GatewaysListResponse{}, errors.New("Akeyless token is not set. Please set the token using the -t or --token flag or set the AKEYLESS_TOKEN environment variable")
+		return akeyless.GatewaysListResponse{}, errors.New(tokenNotSetMessage)
 	}
 	body := akeyless.ListGateways{Token: &token}
 	resp, _, err := client.ListGateways(context.Background()).Body(body).Execute()
@@ -378,8 +382,8 @@ func retrieveListOfGatewaysUsingToken(client *akeyless.V2ApiService, token strin
 // listK8sAuthConfigNames enumerates the k8s auth config names on a gateway. The
 // gateway's /config/k8s-auths endpoint returns a summary list (names only on
 // the unified gateway), which is why detail is fetched separately per config.
-func listK8sAuthConfigNames(clusterURL, token string) ([]string, error) {
-	endpoint := strings.TrimRight(clusterURL, "/") + "/config/k8s-auths"
+func listK8sAuthConfigNames(gatewayBaseURL, token string) ([]string, error) {
+	endpoint := gatewayBaseURL + "/config/k8s-auths"
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -441,11 +445,11 @@ func usableGatewayName(g akeyless.GwClusterIdentity) string {
 	return clusterName
 }
 
-func gatewayMatchesFilter(g akeyless.GwClusterIdentity, filter string) bool {
+func gatewayMatchesFilter(gatewayName, filter string) bool {
 	if filter == "" {
 		return true
 	}
-	return strings.HasPrefix(usableGatewayName(g), filter)
+	return strings.HasPrefix(gatewayName, filter)
 }
 
 func afterLastSlash(s string) string {
