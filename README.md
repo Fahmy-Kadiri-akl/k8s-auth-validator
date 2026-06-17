@@ -1,8 +1,8 @@
 # Kubernetes auth Akeyless Validator
 
-This Go CLI validates the configuration of the currently connected Kubernetes (k8s) clusters using Akeyless. 
+This Go CLI validates the Akeyless Kubernetes (k8s) auth configuration for the cluster your kubeconfig currently points at.
 
-It interacts with the Akeyless API Gateway and uses kubeconfig for Kubernetes interactions.
+It lists the gateways registered to your account, reads each gateway's k8s auth configs, finds the one whose CA certificate matches your current cluster, and then proves the configured token reviewer JWT can perform a TokenReview against that cluster. It works against the Akeyless unified gateway, which serves the v2 API methods under the `/api/v2` path prefix.
 
 ## Example
 
@@ -42,8 +42,10 @@ k8s-auth-validator
 The program takes the following command line arguments:
 
 - `--token, -t`: Akeyless token, required for making authenticated requests to the Akeyless API Gateway.
-- `--api-gateway-url, -u`: The URL of the Akeyless API Gateway. By default, it is set to "https://api.akeyless.io".
+- `--api-gateway-url, -u`: The URL used to list gateways. By default, it is set to "https://api.akeyless.io".
 - `--gateway-name-filter, -g`: A filter for the name of the Akeyless Gateway.
+- `--kubeconfig, -k`: Path to the kubeconfig file. Overrides the `KUBECONFIG` environment variable and the default `~/.kube/config`.
+- `--context, -c`: The kubeconfig context to validate. Defaults to the current-context.
 - `--verbose, -V`: Enables verbose logging to provide detailed debug information.
 - `--version, -v`: Prints the version of the program and exits.
 
@@ -77,21 +79,23 @@ export AKEYLESS_API_GATEWAY_URL="https://mylocalgateway.company.com:8081"
 
 ## Kubeconfig
 
-The program uses the kubeconfig file from the current user's home directory to interact with the Kubernetes cluster.
+The program resolves the kubeconfig honoring, in order: the `--kubeconfig` flag, the `KUBECONFIG` environment variable, then the default `~/.kube/config`. Use `--context` to validate a context other than the current-context without changing your kubeconfig.
 
-### Gateway and Kubernetes Configuration
+## How it works
 
-The program retrieves the list of running gateways from the Akeyless API and their Kubernetes authentication configurations.
+1. Lists the gateways registered to the account using the token (`--api-gateway-url`, default `https://api.akeyless.io`).
+2. For each running gateway, enumerates its k8s auth config names from the gateway's `/config/k8s-auths` endpoint and fetches each config's detail from `<cluster_url>/api/v2/gateway-get-k8s-auth-config`.
+3. Correlates configs to your current cluster by **CA certificate**, not by host. The unified gateway stores the in-cluster API host (`https://kubernetes.default.svc`), which is not reachable from outside the cluster and is not unique per cluster, so the CA certificate is used as the correlation key.
+4. For each matching config, performs a `TokenReview` using the configured token reviewer JWT against your current cluster's reachable API server, with TLS verified against the kubeconfig CA. Authenticating as the reviewer JWT and reviewing that same JWT confirms in one call that the JWT is valid, can reach and authenticate to the API server, and holds the RBAC needed to create TokenReviews.
+
+Configs that use `use_local_ca_jwt` authenticate with the gateway's own in-cluster service account and store no CA, host, or reviewer JWT. They cannot be validated from outside the cluster, so they are reported separately (only for a gateway that is otherwise CA-matched to your current cluster) rather than silently skipped.
 
 ## Outputs
 
-The program outputs several details about the configuration and status of the Kubernetes cluster and the Akeyless Gateways:
+The program prints:
 
-1. Path to the kubeconfig file.
-2. Details about the current context, including the cluster name, namespace, and user.
-3. Certificate authority data and Kubernetes Cluster Endpoint Url (if verbose logging is enabled).
-4. Information about running Akeyless Gateway clusters.
-5. If a matching Kubernetes authentication configuration is found for a cluster, the program prints the name and Access ID of the configuration.
-6. If the Token Reviewer JWT Access is valid, it prints a message indicating so. If not, it prints a message indicating that it is not valid.
+1. The context, cluster name, and API server of the cluster being validated.
+2. For each matching config: the gateway, config name, auth method Access ID, configured k8s host, CA match result, and the TokenReview result (the authenticated reviewer identity, or the failure reason).
+3. Any `use_local_ca_jwt` configs on a matched gateway that cannot be validated externally.
 
-Any errors encountered during the execution of the program are also printed.
+The program exits non-zero if no config matches the current cluster's CA, or if any matched config fails validation.
