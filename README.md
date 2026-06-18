@@ -46,7 +46,8 @@ The program takes the following command line arguments:
 - `--gateway-name-filter, -g`: A filter for the name of the Akeyless Gateway.
 - `--kubeconfig, -k`: Path to the kubeconfig file. Overrides the `KUBECONFIG` environment variable and the default `~/.kube/config`.
 - `--context, -c`: The kubeconfig context to validate. Defaults to the current-context.
-- `--verbose, -V`: Enables verbose logging to provide detailed debug information.
+- `--output, -o`: Output format, `text` (default) or `json`. In `json` mode stdout carries only the JSON report (per-config results plus an overall `verdict` of `pass`, `fail`, or `no-match`); diagnostics and errors go to stderr. This is the contract other tooling consumes.
+- `--verbose, -V`: Enables verbose logging on stderr.
 - `--version, -v`: Prints the version of the program and exits.
 
 #### Token

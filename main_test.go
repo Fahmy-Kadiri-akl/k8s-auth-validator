@@ -104,6 +104,33 @@ func TestCACertMatches(t *testing.T) {
 	})
 }
 
+func TestReportFailedCountAndJSON(t *testing.T) {
+	r := report{
+		Context: "ctx", Cluster: "cl", Server: "https://api:6443",
+		Matched: []configResult{
+			{Gateway: "gw", Config: "/a", CAMatch: true, Valid: true,
+				TokenReview: &tokenReviewResult{Authenticated: true, Username: "system:serviceaccount:ns:sa"}},
+			{Gateway: "gw", Config: "/b", CAMatch: true, Valid: false,
+				TokenReview: &tokenReviewResult{Error: "not authenticated"}},
+		},
+		LocalCAJwt: []configRef{{Gateway: "gw", Config: "/c"}},
+		Verdict:    verdictFail,
+	}
+	assert.Equal(t, 1, r.failedCount())
+
+	// The JSON contract must round-trip with the documented keys.
+	b, err := json.Marshal(r)
+	assert.NoError(t, err)
+	var back map[string]interface{}
+	assert.NoError(t, json.Unmarshal(b, &back))
+	assert.Equal(t, "fail", back["verdict"])
+	matched := back["matched"].([]interface{})
+	assert.Len(t, matched, 2)
+	first := matched[0].(map[string]interface{})
+	assert.Equal(t, true, first["valid"])
+	assert.Contains(t, string(b), `"token_review"`)
+}
+
 func TestUsableGatewayNameAndFilter(t *testing.T) {
 	withDisplay := akeyless.GwClusterIdentity{}
 	withDisplay.SetDisplayName("gcp-microk8s")
